@@ -1,0 +1,38 @@
+name: Stock Alert Bot
+
+on:
+  schedule:
+    # Run every hour (at minute 0)
+    - cron: '0 * * * *'
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  stock-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Job
+        env:
+          BREVO_APIKEY: ${{ secrets.BREVO_APIKEY }}
+        run: |
+          # Run main.py once (Simulation Mode).
+          # NOTE: main.py has an infinite loop 'schedule.every()...' by default.
+          # We don't want the infinite loop in GitHub Actions (it costs money/time).
+          # We need a way to run it *ONCE*.
+          # Workaround: Python has no easy 'timeout' for import, but we can update main.py to handle a --once flag or just rely on 5m timeout.
+          # BETTER: Update main.py to accept --once.
+          python main.py --once
