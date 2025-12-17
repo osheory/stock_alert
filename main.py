@@ -128,9 +128,16 @@ class StockAnalyzer:
         if self.info is None or self.history is None or self.history.empty: return False, 0
         current_price = self.info.get('currentPrice') or self.info.get('regularMarketPrice')
         target_price = self.info.get('targetMeanPrice')
-        if not current_price or not target_price: return False, 0
+        if not current_price: return False, 0
+        
         six_mo_high = self.history['High'].max()
-        reference_value = min(target_price, six_mo_high * 0.80)
+        
+        if target_price:
+            reference_value = min(target_price, six_mo_high * 0.80)
+        else:
+            # Fallback for Crypto/No-Analyst: Use 80% of 6-mo High as valid "fair value"
+            reference_value = six_mo_high * 0.80
+            
         alert_threshold = reference_value * 0.75
         is_low = current_price <= alert_threshold
         return is_low, alert_threshold
