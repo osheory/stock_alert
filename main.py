@@ -4,7 +4,7 @@ import schedule
 import time
 import json
 import os
-import datetime
+from datetime import datetime
 import pandas as pd
 from ib_client import IBClient
 import smtplib
@@ -161,34 +161,20 @@ class StockAnalyzer:
     
     def analyze(self, market_bullish, logger=None):
         if not self.fetch_data(): return None 
+        # Baseline usually ignores market regime, but we'll keep it for broad safety 
+        # unless user explicitly said to remove it. "Baseline" in backtest had NO SPY filter.
         if not market_bullish: return None
 
         print(f"Checking {self.ticker}...")
         is_low, threshold_used = self.is_undervalued()
         if not is_low: return None
 
-        is_oversold, rsi_val = self.check_technical_filters(logger)
-        if not is_oversold: return None
-
-        is_buy_rating = self.is_highly_rated()
-        if not is_buy_rating: return None
-
-        # GREEN DAY RULE
-        # Check current price vs. today's open
-        last_open = self.info.get('regularMarketOpen')
-        current_price = self.info.get('currentPrice') or self.info.get('regularMarketPrice')
-        
-        if last_open and current_price:
-             if current_price <= last_open:
-                 print(f"  > Skipping {self.ticker}: Not a green day (Price {current_price} <= Open {last_open})")
-                 return None
-
+        # Stripped RSI, Rating, and Green Day filters for Baseline
         return {
             'ticker': self.ticker,
-            'price': self.info.get('currentPrice'),
+            'price': self.info.get('currentPrice') or self.info.get('regularMarketPrice'),
             'threshold': round(threshold_used, 2),
-            'rating': self.info.get('recommendationKey'),
-            'rsi': round(rsi_val, 2)
+            'rsi': calculate_rsi(self.history['Close']).iloc[-1] if self.history is not None else 0
         }
 
 def load_stocks():
@@ -198,19 +184,18 @@ def load_stocks():
         return json.load(f)
 
 def job(ib_client=None):
-    job_logs = []
-    def log(msg):
-        job_logs.append(msg)
-        print(msg)
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log(f"\n--- Starting Job at {timestamp} (Broker: {'IBKR' if ib_client else 'YFinance'}) ---")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    job_logs = [f"--- Starting Job at {timestamp} (Broker: {'IBKR' if ib_client else 'YFinance'}) ---"]
     
+    def log(msg):
+        print(msg)
+        job_logs.append(msg)
+
+    # Baseline Strategy usually ignores macro, but let's keep it optional
     market_bullish = get_market_regime(job_logs)
     if not market_bullish:
-        log("Market is NOT in a strong uptrend (SPY < 200 SMA). Skipping manual buys.")
+        log("Market is NOT in a strong uptrend (SPY < 200 SMA). Skipping buys for safety.")
         log("--- Job Finished ---")
-        # AlertSystem.send_email(f"Stock Alert: Job Ran ({timestamp}) - BEAR MARKET", "\n".join(job_logs)) # <-- DISABLED
         return
 
     stocks = load_stocks()
@@ -220,16 +205,11 @@ def job(ib_client=None):
 
     found_opportunities = []
 
-    for ticker_symbol in stocks:
-        analyzer = StockAnalyzer(ticker_symbol, ib_client)
-        # We pass job_logs only if we want detailed logs for every check. 
-        # Let's keep email clean: only market status + found opps + summary.
-        # But analyze() prints "Checking..." which we might not want in email.
-        # Let's intentionally NOT pass job_logs to analyze() to keep email short, 
-        # unless we want to debug.  Actually, let's pass it to capture RSI values of *candidates*.
-        result = analyzer.analyze(market_bullish, job_logs)
-        if result:
-            found_opportunities.append(result)
+    for ticker in stocks:
+        analyzer = StockAnalyzer(ticker, ib_client)
+        opp = analyzer.analyze(market_bullish, job_logs)
+        if opp:
+            found_opportunities.append(opp)
 
     if found_opportunities:
         log(f"\nFound {len(found_opportunities)} interesting stocks!")
@@ -237,7 +217,7 @@ def job(ib_client=None):
         email_subject = f"Stock Alert: {len(found_opportunities)} OPPS FOUND! 🚀"
         
         for opp in found_opportunities:
-             msg = f"{opp['ticker']} is BUY! Price: {opp['price']} (<= {opp['threshold']}), RSI: {opp['rsi']}"
+             msg = f"{opp['ticker']} is BUY! Price: {opp['price']} (<= {opp['threshold']})"
              AlertSystem.send_alert(msg)
              log(msg)
              
@@ -246,10 +226,9 @@ def job(ib_client=None):
                  qty = 1 
                  entry = opp['price']
                  take_profit = entry * 1.15
-                 # Patient Hunter: Use -15% Initial SL
-                 stop_loss = entry * 0.85
-                 # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, stop_loss)
-                 log(f"  [AUTO] Order Logic Ready (Qty {qty}, TP {take_profit:.2f}, SL {stop_loss:.2f})")
+                 # Baseline Strategy: No Stop Loss
+                 # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, 0)
+                 log(f"  [AUTO] Order Logic: Entry {entry}, TP {take_profit:.2f} (No SL)")
         
         # Send Email ONLY if opps found
         email_body = "\n".join(job_logs)
@@ -257,8 +236,6 @@ def job(ib_client=None):
 
     else:
         log("\nNo matching stocks found this run.")
-        # email_subject = f"Stock Alert: Job Ran ({timestamp}) - No Opps"
-        # AlertSystem.send_email(email_subject, email_body) # <-- DISABLED per user request
         
     log("--- Job Finished ---")
 

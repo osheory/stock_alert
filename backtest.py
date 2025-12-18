@@ -223,11 +223,12 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
             sell_price = 0
             
             if strategy_name == "Baseline":
+                # Fixed 15% Profit Target
                 if high_price >= entry_price * 1.15:
                     sell_reason = "Target (+15%)"
                     sell_price = entry_price * 1.15
             else:
-                # PATIENT HUNTER logic (Strategy: Advanced)
+                # ADVANCED / PATIENT HUNTER logic
                 if high_price > position['highest_price']:
                     position['highest_price'] = high_price
                 
@@ -271,11 +272,17 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
                 
                 if pd.isna(row['BuyThreshold']): continue
 
+                # Entry Rules
                 if price <= row['BuyThreshold']:
-                    if strategy_name == "Advanced":
+                    if strategy_name == "Baseline":
+                        # No technical filters for baseline
+                        pass 
+                    else:
+                        # Advanced Filters
                         if row['RSI'] >= 30: continue
                         if row['SPY_Close'] <= row['SPY_SMA200']: continue
-                        if row['Close'] <= row['Open']: continue # Green Day Rule
+                        if row['Close'] <= row['Open']: continue # Green Day
+                    
                     candidates.append((ticker, price, row['RSI'] if 'RSI' in row else 0))
             
             if candidates:
