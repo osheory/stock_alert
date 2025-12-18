@@ -161,7 +161,7 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
         info = stock.info
         target_price = info.get('targetMeanPrice')
         
-        if not target_price or hist.empty:
+        if hist.empty:
             continue
             
         # Indicators
@@ -171,9 +171,17 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
         # Join SPY
         hist = hist.join(spy_hist[['Close', 'SMA200']].rename(columns={'Close': 'SPY_Close', 'SMA200': 'SPY_SMA200'}))
         
-        # Value = min(Target, 0.8 * 6mHigh)
-        # Threshold = 0.75 * Value (Original)
-        hist['RefVal'] = hist['6mHigh'].apply(lambda x: min(target_price, x * 0.80) if pd.notnull(x) else None)
+        # Value Logic with Fallback
+        def get_ref_val(row, tgt):
+            high_6m = row['6mHigh']
+            if pd.isna(high_6m): return None
+            
+            if tgt:
+                return min(tgt, high_6m * 0.80)
+            else:
+                return high_6m * 0.80
+
+        hist['RefVal'] = hist.apply(lambda row: get_ref_val(row, target_price), axis=1)
         hist['BuyThreshold'] = hist['RefVal'] * 0.75
         
         market_data[ticker] = hist
@@ -207,25 +215,40 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
             low_price = row['Low']
             close_price = row['Close']
             
-            if high_price > position['highest_price']:
-                position['highest_price'] = high_price
-                
-            days_held = (current_date - position['date']).days
+            # PATIENT HUNTER LOGIC
             entry_price = position['entry_price']
+            days_held = (current_date - position['date']).days
             
             sell_reason = None
             sell_price = 0
             
-            # ADVANCED STRATEGY ONLY
-            if high_price >= entry_price * 1.15:
-                sell_reason = "Target (+15%)"
-                sell_price = entry_price * 1.15
-            elif low_price <= (position['highest_price'] * 0.90):
-                sell_reason = "Trailing Stop (-10%)"
-                sell_price = position['highest_price'] * 0.90
-            elif days_held >= time_stop_days:
-                sell_reason = f"Time Stop ({time_stop_days}d)"
-                sell_price = close_price
+            if strategy_name == "Baseline":
+                if high_price >= entry_price * 1.15:
+                    sell_reason = "Target (+15%)"
+                    sell_price = entry_price * 1.15
+            else:
+                # PATIENT HUNTER logic (Strategy: Advanced)
+                if high_price > position['highest_price']:
+                    position['highest_price'] = high_price
+                
+                initial_sl = entry_price * 0.85
+                
+                # Activate Trailing Stop if hit +10%
+                if not position.get('trailing_active') and high_price >= entry_price * 1.10:
+                    position['trailing_active'] = True
+                
+                if high_price >= entry_price * 1.15:
+                    sell_reason = "Target (+15%)"
+                    sell_price = entry_price * 1.15
+                elif position.get('trailing_active') and low_price <= (position['highest_price'] * 0.90):
+                    sell_reason = "Trailing Stop (-10%)"
+                    sell_price = position['highest_price'] * 0.90
+                elif not position.get('trailing_active') and low_price <= initial_sl:
+                    sell_reason = "Initial Stop (-15%)"
+                    sell_price = initial_sl
+                elif days_held >= time_stop_days:
+                    sell_reason = f"Time Stop ({time_stop_days}d)"
+                    sell_price = close_price
             
             if sell_reason:
                 revenue = position['shares'] * sell_price
@@ -246,19 +269,20 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
                 row = df.loc[current_date]
                 price = row['Close']
                 
-                # IMPORTANT: If BuyThreshold is NaN, skip
                 if pd.isna(row['BuyThreshold']): continue
 
                 if price <= row['BuyThreshold']:
-                    if row['RSI'] >= 30: continue
-                    if row['SPY_Close'] <= row['SPY_SMA200']: continue
+                    if strategy_name == "Advanced":
+                        if row['RSI'] >= 30: continue
+                        if row['SPY_Close'] <= row['SPY_SMA200']: continue
+                        if row['Close'] <= row['Open']: continue # Green Day Rule
                     candidates.append((ticker, price, row['RSI'] if 'RSI' in row else 0))
             
             if candidates:
                 candidates.sort(key=lambda x: x[2]) 
                 tick, price, rsi = candidates[0]
                 shares = cash / price
-                position = {'ticker': tick, 'shares': shares, 'entry_price': price, 'highest_price': price, 'date': current_date}
+                position = {'ticker': tick, 'shares': shares, 'entry_price': price, 'highest_price': price, 'date': current_date, 'trailing_active': False}
                 cash = 0
                 print(f"  [BUY]  {tick} on {current_date.date()} @ {price:.2f}")
 
@@ -289,4 +313,3 @@ def run_backtest():
 
 if __name__ == "__main__":
     run_backtest()
-```

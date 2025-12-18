@@ -173,6 +173,16 @@ class StockAnalyzer:
         is_buy_rating = self.is_highly_rated()
         if not is_buy_rating: return None
 
+        # GREEN DAY RULE
+        # Check current price vs. today's open
+        last_open = self.info.get('regularMarketOpen')
+        current_price = self.info.get('currentPrice') or self.info.get('regularMarketPrice')
+        
+        if last_open and current_price:
+             if current_price <= last_open:
+                 print(f"  > Skipping {self.ticker}: Not a green day (Price {current_price} <= Open {last_open})")
+                 return None
+
         return {
             'ticker': self.ticker,
             'price': self.info.get('currentPrice'),
@@ -236,7 +246,8 @@ def job(ib_client=None):
                  qty = 1 
                  entry = opp['price']
                  take_profit = entry * 1.15
-                 stop_loss = entry * 0.90
+                 # Patient Hunter: Use -15% Initial SL
+                 stop_loss = entry * 0.85
                  # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, stop_loss)
                  log(f"  [AUTO] Order Logic Ready (Qty {qty}, TP {take_profit:.2f}, SL {stop_loss:.2f})")
         
