@@ -161,20 +161,25 @@ class StockAnalyzer:
     
     def analyze(self, market_bullish, logger=None):
         if not self.fetch_data(): return None 
-        # Baseline usually ignores market regime, but we'll keep it for broad safety 
-        # unless user explicitly said to remove it. "Baseline" in backtest had NO SPY filter.
         if not market_bullish: return None
 
         print(f"Checking {self.ticker}...")
         is_low, threshold_used = self.is_undervalued()
         if not is_low: return None
 
-        # Stripped RSI, Rating, and Green Day filters for Baseline
+        # Re-enabled Advanced Filters
+        is_oversold, rsi_val = self.check_technical_filters(logger)
+        if not is_oversold: return None
+
+        is_buy_rating = self.is_highly_rated()
+        if not is_buy_rating: return None
+
         return {
             'ticker': self.ticker,
             'price': self.info.get('currentPrice') or self.info.get('regularMarketPrice'),
             'threshold': round(threshold_used, 2),
-            'rsi': calculate_rsi(self.history['Close']).iloc[-1] if self.history is not None else 0
+            'rating': self.info.get('recommendationKey'),
+            'rsi': round(rsi_val, 2)
         }
 
 def load_stocks():
@@ -217,7 +222,7 @@ def job(ib_client=None):
         email_subject = f"Stock Alert: {len(found_opportunities)} OPPS FOUND! 🚀"
         
         for opp in found_opportunities:
-             msg = f"{opp['ticker']} is BUY! Price: {opp['price']} (<= {opp['threshold']})"
+             msg = f"{opp['ticker']} is BUY! Price: {opp['price']} (<= {opp['threshold']}), RSI: {opp['rsi']}"
              AlertSystem.send_alert(msg)
              log(msg)
              
@@ -226,9 +231,10 @@ def job(ib_client=None):
                  qty = 1 
                  entry = opp['price']
                  take_profit = entry * 1.15
-                 # Baseline Strategy: No Stop Loss
-                 # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, 0)
-                 log(f"  [AUTO] Order Logic: Entry {entry}, TP {take_profit:.2f} (No SL)")
+                 # Advanced Strategy: 10% Trailing Stop
+                 stop_loss = entry * 0.90
+                 # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, stop_loss)
+                 log(f"  [AUTO] Order Logic: Entry {entry}, TP {take_profit:.2f}, SL (Trailing 10%) {stop_loss:.2f}")
         
         # Send Email ONLY if opps found
         email_body = "\n".join(job_logs)

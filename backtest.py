@@ -228,25 +228,16 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
                     sell_reason = "Target (+15%)"
                     sell_price = entry_price * 1.15
             else:
-                # ADVANCED / PATIENT HUNTER logic
+                # ADVANCED Strategy
                 if high_price > position['highest_price']:
                     position['highest_price'] = high_price
-                
-                initial_sl = entry_price * 0.85
-                
-                # Activate Trailing Stop if hit +10%
-                if not position.get('trailing_active') and high_price >= entry_price * 1.10:
-                    position['trailing_active'] = True
                 
                 if high_price >= entry_price * 1.15:
                     sell_reason = "Target (+15%)"
                     sell_price = entry_price * 1.15
-                elif position.get('trailing_active') and low_price <= (position['highest_price'] * 0.90):
+                elif low_price <= (position['highest_price'] * 0.90):
                     sell_reason = "Trailing Stop (-10%)"
                     sell_price = position['highest_price'] * 0.90
-                elif not position.get('trailing_active') and low_price <= initial_sl:
-                    sell_reason = "Initial Stop (-15%)"
-                    sell_price = initial_sl
                 elif days_held >= time_stop_days:
                     sell_reason = f"Time Stop ({time_stop_days}d)"
                     sell_price = close_price
@@ -275,13 +266,12 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
                 # Entry Rules
                 if price <= row['BuyThreshold']:
                     if strategy_name == "Baseline":
-                        # No technical filters for baseline
                         pass 
                     else:
-                        # Advanced Filters
+                        # Advanced Filters: RSI < 30 and SPY Bull
                         if row['RSI'] >= 30: continue
                         if row['SPY_Close'] <= row['SPY_SMA200']: continue
-                        if row['Close'] <= row['Open']: continue # Green Day
+                        # (Removed Green Day Rule for original Advanced Strategy)
                     
                     candidates.append((ticker, price, row['RSI'] if 'RSI' in row else 0))
             
@@ -289,7 +279,7 @@ def run_portfolio_simulation(stocks, strategy_name, spy_hist, period_years=1, st
                 candidates.sort(key=lambda x: x[2]) 
                 tick, price, rsi = candidates[0]
                 shares = cash / price
-                position = {'ticker': tick, 'shares': shares, 'entry_price': price, 'highest_price': price, 'date': current_date, 'trailing_active': False}
+                position = {'ticker': tick, 'shares': shares, 'entry_price': price, 'highest_price': price, 'date': current_date}
                 cash = 0
                 print(f"  [BUY]  {tick} on {current_date.date()} @ {price:.2f}")
 
