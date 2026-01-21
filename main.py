@@ -167,7 +167,7 @@ class StockAnalyzer:
         current_price = (self.info.get('currentPrice') or self.info.get('regularMarketPrice')) or 0
         rating = self.info.get('recommendationKey', 'N/A')
         
-        insight = f"   > [Insight] Price: {current_price:.2f} (Limit: {threshold_used:.2f}) | RSI: {rsi_val:.2f} | Rating: {rating}"
+        insight = f"   > [Insight] {self.ticker}: Price: {current_price:.2f} (Limit: {threshold_used:.2f}) | RSI: {rsi_val:.2f} | Rating: {rating}"
         print(insight)
         if logger is not None: logger.append(insight)
 
