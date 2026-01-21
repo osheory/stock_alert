@@ -66,6 +66,7 @@ def get_market_regime(logger=None):
     Returns True if SPY is in a bull market (Price > 200 SMA), else False.
     """
     def log(msg):
+        
         if logger is not None: logger.append(msg)
         print(msg)
 
@@ -147,11 +148,6 @@ class StockAnalyzer:
         rsi_series = calculate_rsi(self.history['Close'])
         current_rsi = rsi_series.iloc[-1]
         is_oversold = current_rsi < 30
-        
-        msg = f"  > {self.ticker}: RSI={current_rsi:.2f} ({'Oversold' if is_oversold else 'Neutral'}) - Price: {self.info.get('currentPrice', 0):.2f}"
-        if logger is not None and is_oversold: logger.append(msg)
-        print(msg)
-        
         return is_oversold, current_rsi
 
     def is_highly_rated(self):
@@ -165,22 +161,25 @@ class StockAnalyzer:
 
         print(f"Checking {self.ticker}...")
         is_low, threshold_used = self.is_undervalued()
-        if not is_low: return None
-
-        # Re-enabled Advanced Filters
         is_oversold, rsi_val = self.check_technical_filters(logger)
-        if not is_oversold: return None
-
         is_buy_rating = self.is_highly_rated()
-        if not is_buy_rating: return None
+        
+        current_price = (self.info.get('currentPrice') or self.info.get('regularMarketPrice')) or 0
+        rating = self.info.get('recommendationKey', 'N/A')
+        
+        insight = f"   > [Insight] Price: {current_price:.2f} (Limit: {threshold_used:.2f}) | RSI: {rsi_val:.2f} | Rating: {rating}"
+        print(insight)
+        if logger is not None: logger.append(insight)
 
-        return {
-            'ticker': self.ticker,
-            'price': self.info.get('currentPrice') or self.info.get('regularMarketPrice'),
-            'threshold': round(threshold_used, 2),
-            'rating': self.info.get('recommendationKey'),
-            'rsi': round(rsi_val, 2)
-        }
+        if is_low and is_oversold and is_buy_rating:
+            return {
+                'ticker': self.ticker,
+                'price': current_price,
+                'threshold': round(threshold_used, 2),
+                'rating': rating,
+                'rsi': round(rsi_val, 2)
+            }
+        return None
 
 def load_stocks():
     if not os.path.exists(STOCKS_FILE):
@@ -218,7 +217,6 @@ def job(ib_client=None):
 
     if found_opportunities:
         log(f"\nFound {len(found_opportunities)} interesting stocks!")
-        
         email_subject = f"Stock Alert: {len(found_opportunities)} OPPS FOUND! 🚀"
         
         for opp in found_opportunities:
@@ -235,13 +233,13 @@ def job(ib_client=None):
                  stop_loss = entry * 0.90
                  # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, stop_loss)
                  log(f"  [AUTO] Order Logic: Entry {entry}, TP {take_profit:.2f}, SL (Trailing 10%) {stop_loss:.2f}")
-        
-        # Send Email ONLY if opps found
-        email_body = "\n".join(job_logs)
-        AlertSystem.send_email(email_subject, email_body)
-
     else:
         log("\nNo matching stocks found this run.")
+        email_subject = "Stock Alert: Daily Insight Report (No Buys)"
+
+    # Send Email ALWAYS
+    email_body = "\n".join(job_logs)
+    AlertSystem.send_email(email_subject, email_body)
         
     log("--- Job Finished ---")
 
@@ -272,8 +270,9 @@ def main():
         if ib_client: ib_client.disconnect()
         return
 
-    # Schedule
-    schedule.every(1).hours.do(job, ib_client=ib_client)
+    # Schedule (Fallback for long-running local dev. Production is handled by GitHub Actions)
+    # 23:05 local time is a safe daily summary if run locally.
+    schedule.every().day.at("23:05").do(job, ib_client=ib_client)
 
     try:
         while True:
