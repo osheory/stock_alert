@@ -21,7 +21,7 @@ class AlertSystem:
         print(f"\n[ALERT] {message}")
 
     @staticmethod
-    def send_email(subject, body):
+    def send_email(subject, body, is_html=False):
         # 1. Try Environment Variable (Best for GitHub Actions/Secrets)
         api_key = os.environ.get('BREVO_APIKEY')
         
@@ -42,18 +42,21 @@ class AlertSystem:
             "api-key": api_key,
             "content-type": "application/json"
         }
+        
+        content_key = "htmlContent" if is_html else "textContent"
+        
         payload = {
             "sender": {"name": "Stock Alert Bot", "email": sender_email},
             "to": [{"email": recipient}],
             "subject": subject,
-            "textContent": body
+            content_key: body
         }
         
         try:
             import requests # Lazy import to ensure it exists
             response = requests.post(url, json=payload, headers=headers)
             if response.status_code in [201, 202]:
-                print("\n[Email] Notification sent successfully via Brevo API! �")
+                print("\n[Email] Notification sent successfully via Brevo API! 🚀")
             else:
                 print(f"\n[Email] Failed (HTTP {response.status_code}): {response.text}")
         except Exception as e:
@@ -167,19 +170,25 @@ class StockAnalyzer:
         current_price = (self.info.get('currentPrice') or self.info.get('regularMarketPrice')) or 0
         rating = self.info.get('recommendationKey', 'N/A')
         
+        gap_val = current_price - threshold_used
+        gap_pct = (gap_val / threshold_used * 100) if threshold_used != 0 else 0
+        
         insight = f"   > [Insight] {self.ticker}: Price: {current_price:.2f} (Limit: {threshold_used:.2f}) | RSI: {rsi_val:.2f} | Rating: {rating}"
         print(insight)
         if logger is not None: logger.append(insight)
 
-        if is_low and is_oversold and is_buy_rating:
-            return {
-                'ticker': self.ticker,
-                'price': current_price,
-                'threshold': round(threshold_used, 2),
-                'rating': rating,
-                'rsi': round(rsi_val, 2)
-            }
-        return None
+        is_recommended = is_low and is_oversold and is_buy_rating
+        
+        return {
+            'ticker': self.ticker,
+            'price': round(current_price, 2),
+            'threshold': round(threshold_used, 2),
+            'rating': rating,
+            'rsi': round(rsi_val, 2),
+            'gap_val': round(gap_val, 2),
+            'gap_pct': round(gap_pct, 1),
+            'is_recommended': is_recommended
+        }
 
 def load_stocks():
     if not os.path.exists(STOCKS_FILE):
@@ -195,52 +204,113 @@ def job(ib_client=None):
         print(msg)
         job_logs.append(msg)
 
-    # Baseline Strategy usually ignores macro, but let's keep it optional
     market_bullish = get_market_regime(job_logs)
+    stocks = load_stocks()
+    
+    analysis_results = []
+    if market_bullish and stocks:
+        for ticker in stocks:
+            analyzer = StockAnalyzer(ticker, ib_client)
+            res = analyzer.analyze(market_bullish, job_logs)
+            if res:
+                analysis_results.append(res)
+
+    found_opportunities = [r for r in analysis_results if r.get('is_recommended')]
+
     if not market_bullish:
         log("Market is NOT in a strong uptrend (SPY < 200 SMA). Skipping buys for safety.")
-        log("--- Job Finished ---")
-        return
-
-    stocks = load_stocks()
-    if not stocks:
-        log("No stocks to check.")
-        return
-
-    found_opportunities = []
-
-    for ticker in stocks:
-        analyzer = StockAnalyzer(ticker, ib_client)
-        opp = analyzer.analyze(market_bullish, job_logs)
-        if opp:
-            found_opportunities.append(opp)
-
-    if found_opportunities:
+        email_subject = "Stock Alert: Market BEARISH (No Buys)"
+    elif found_opportunities:
         log(f"\nFound {len(found_opportunities)} interesting stocks!")
         email_subject = f"Stock Alert: {len(found_opportunities)} OPPS FOUND! 🚀"
-        
         for opp in found_opportunities:
              msg = f"{opp['ticker']} is BUY! Price: {opp['price']} (<= {opp['threshold']}), RSI: {opp['rsi']}"
              AlertSystem.send_alert(msg)
              log(msg)
-             
              if ib_client:
-                 log(f"  [AUTO] Placing Bracket Order for {opp['ticker']}...")
-                 qty = 1 
-                 entry = opp['price']
-                 take_profit = entry * 1.15
-                 # Advanced Strategy: 10% Trailing Stop
-                 stop_loss = entry * 0.90
-                 # ib_client.submit_bracket_order(opp['ticker'], qty, entry, take_profit, stop_loss)
-                 log(f"  [AUTO] Order Logic: Entry {entry}, TP {take_profit:.2f}, SL (Trailing 10%) {stop_loss:.2f}")
+                 log(f"  [AUTO] Order Logic: Entry {opp['price']}, TP {opp['price']*1.15:.2f}, SL (Trailing 10%) {opp['price']*0.90:.2f}")
     else:
         log("\nNo matching stocks found this run.")
-        email_subject = "Stock Alert: Daily Insight Report (No Buys)"
+        email_subject = "Stock Alert: Daily Insight Report"
 
-    # Send Email ALWAYS
-    email_body = "\n".join(job_logs)
-    AlertSystem.send_email(email_subject, email_body)
+    # HTML Generation
+    html_template = """
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f7; color: #333; margin: 0; padding: 20px; }}
+            .container {{ background-color: #ffffff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 600px; margin: auto; }}
+            h2 {{ color: #1a1a1a; font-size: 18px; margin-top: 0; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }}
+            th, td {{ padding: 8px; text-align: left; border-bottom: 1px solid #eee; }}
+            th {{ background-color: #f8f9fa; color: #666; font-weight: 600; text-transform: uppercase; font-size: 11px; }}
+            .rec {{ background-color: #d4edda !important; color: #155724; font-weight: bold; }}
+            .gap-neg {{ color: #d9534f; }}
+            .gap-pos {{ color: #5cb85c; }}
+            .meta {{ font-size: 12px; color: #888; margin-bottom: 10px; }}
+            @media screen and (max-width: 480px) {{
+                th, td {{ padding: 6px 4px; font-size: 12px; }}
+                .hide-mobile {{ display: none; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Stock Insights - {timestamp}</h2>
+            <div class="meta">{market_status}</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ticker</th>
+                        <th>Price</th>
+                        <th>Limit</th>
+                        <th>Gap</th>
+                        <th>RSI</th>
+                        <th class="hide-mobile">Rating</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {table_rows}
+                </tbody>
+            </table>
+            <p style="font-size: 11px; color: #999; margin-top: 20px;">
+                * Green highlighting indicates RSI < 30 + Price <= Limit + BUY rating.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    market_status = "🟢 Market Bullish (SPY > 200 SMA)" if market_bullish else "🔴 Market Bearish (SPY < 200 SMA)"
+    
+    rows = ""
+    for r in analysis_results:
+        row_class = 'class="rec"' if r['is_recommended'] else ""
+        gap_style = "gap-neg" if r['gap_val'] > 0 else "gap-pos"
+        gap_text = f"{r['gap_val']:.2f} ({r['gap_pct']:+.1f}%)"
         
+        rows += f"""
+        <tr {row_class}>
+            <td>{r['ticker']}</td>
+            <td>{r['price']}</td>
+            <td>{r['threshold']}</td>
+            <td class="{gap_style}">{gap_text}</td>
+            <td>{r['rsi']}</td>
+            <td class="hide-mobile">{r['rating']}</td>
+        </tr>
+        """
+    
+    if not analysis_results:
+        rows = "<tr><td colspan='6' style='text-align:center;'>No data available or market bearish.</td></tr>"
+
+    email_html = html_template.format(
+        timestamp=timestamp,
+        market_status=market_status,
+        table_rows=rows
+    )
+
+    AlertSystem.send_email(email_subject, email_html, is_html=True)
     log("--- Job Finished ---")
 
 def main():
